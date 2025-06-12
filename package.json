@@ -1,0 +1,30 @@
+{
+  "name": "attrix",
+  "version": "1.0.0",
+  "description": "An attribute based styling system designed for lazy people like me",
+  "main": "dist/index.js",
+  "scripts": {
+    "test": "ts-node src/index.ts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mauro-balades/AttriX.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/mauro-balades/AttriX/issues"
+  },
+  "homepage": "https://github.com/mauro-balades/AttriX#readme",
+  "devDependencies": {
+    "postcss-values-parser": "^6.0.2",
+    "ts-node": "^10.9.2",
+    "tsc": "^2.0.4",
+    "typescript": "^5.8.3"
+  },
+  "dependencies": {
+    "node-html-parser": "^7.0.1"
+  }
+}
