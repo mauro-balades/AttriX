@@ -329,14 +329,22 @@ const createStyleSheet = () => {
   for (const attr of gGatheredAttrs) {
     let { key, value } = attr;
     let foundMediaQuery = "";
+    let foundMendiaQueryName = "";
     for (const mediaQuery of gMediaQueries) {
       if (key.startsWith(`${mediaQuery}:`)) {
         // It's a media query, we need to handle it separately
         key = key.slice(mediaQuery.length + 1); // Remove the media query prefix
         foundMediaQuery = getMediaQuery(mediaQuery) as string;
+        foundMendiaQueryName = mediaQuery;
         break;
       }
     }
+    const getCSSAttributeName = (name: string) => {
+      if (foundMediaQuery) {
+        return `${foundMendiaQueryName}:${name}`;
+      }
+      return name;
+    };
     const addToStyleSheet = (rule: string) => {
       if (foundMediaQuery) {
         if (!gMediaQueriesToFill.has(foundMediaQuery)) {
@@ -361,13 +369,13 @@ const createStyleSheet = () => {
         // Add to the style sheet as the form of a CSS variable
         const varName = createCssValue(`${parentAttr.name}-${key}`);
         validateCSSValue(value, cssAttr.types, parentAttr.attr);
-        addToStyleSheet(getCSSRule(key, value, value, varName));
+        addToStyleSheet(getCSSRule(getCSSAttributeName(key), value, value, varName));
       } else {
         // It's a simple attribute
         if (cssAttr.type === "property") {
           if (cssAttr.subAttributes) {
             if (!gParentAttributesToFill.has(cssAttr.CSSName || key)) {
-              gParentAttributesToFill.set(key, cssAttr);
+              gParentAttributesToFill.set(getCSSAttributeName(key), cssAttr);
             }
           }
           // Add to the style sheet as the form of a CSS variable
@@ -388,11 +396,11 @@ const createStyleSheet = () => {
             const varName = createCssValue(
               `${cssAttr.CSSName || key}-${subAttributeWithType[0]}`,
             );
-            addToStyleSheet(getCSSRule(key, value, value, varName));
+            addToStyleSheet(getCSSRule(getCSSAttributeName(key), value, value, varName));
           } else {
             validateCSSValue(value, cssAttr.valueType, cssAttr);
             addToStyleSheet(
-              getCSSRule(key, value, value, cssAttr.CSSName || key),
+              getCSSRule(getCSSAttributeName(key), value, value, cssAttr.CSSName || key),
             );
           }
         } else {
@@ -412,8 +420,11 @@ const createStyleSheet = () => {
     const cssValue = attr.CSSValue;
     sheet += getCSSRule(attributeNames, "", cssValue, attr.CSSName || name);
   }
-  for (const [mediaQuery, rules] of gMediaQueriesToFill) {
-    sheet += `${mediaQuery} {\n${rules}}\n`;
+  for (const query of gMediaQueries) {
+    if (gMediaQueriesToFill.has(getMediaQuery(query))) {
+      const rules = gMediaQueriesToFill.get(getMediaQuery(query));
+      sheet += `${getMediaQuery(query)} {\n${rules}}\n`;
+    }
   }
   return sheet;
 };
