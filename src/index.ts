@@ -12,54 +12,16 @@ type AttributeType =
   | "string"
   | "url"
   | "word";
+
 interface ICSSAttribute {
   type: "var" | "property";
   valueType: AttributeType[] | AttributeType;
   CSSName?: string;
   CSSValue: string;
-  subAttributes?: Record<string, AttributeType | AttributeType[]>;
-  canHaveShortHand?: boolean;
   allowedValues?: string[];
-}
-interface ICSSSubAttribute {
-  types: AttributeType | AttributeType[];
-  parentAttribute: {
-    name: string;
-    attr: ICSSAttribute;
-  };
 }
 
 const createCssValue = (name: string) => `--attrix-${name}`;
-const createComposedCssAttribute = (
-  name: string,
-  subAttributes: Record<string, AttributeType | AttributeType[]>,
-  cssName?: string,
-  canHaveShortHand = false,
-): Record<string, ICSSAttribute> => {
-  if (!cssName) {
-    cssName = name;
-  }
-  if (canHaveShortHand) {
-    subAttributes = {
-      shorthand: [...Object.values(subAttributes)].flat(),
-      ...subAttributes,
-    };
-  }
-  return {
-    [name]: {
-      type: "property",
-      valueType: "never",
-      CSSName: cssName,
-      CSSValue: Object.entries(subAttributes)
-        .map(
-          ([subKey, _]) => "var(" + createCssValue(`${name}-${subKey}`) + ")",
-        )
-        .join(" "),
-      subAttributes,
-      canHaveShortHand,
-    },
-  };
-};
 
 const CSSDefinitions: Record<string, ICSSAttribute> = {
   color: {
@@ -67,17 +29,6 @@ const CSSDefinitions: Record<string, ICSSAttribute> = {
     valueType: "color",
     CSSValue: "<value>",
   },
-  ...createComposedCssAttribute(
-    "bg",
-    {
-      color: "color",
-      image: "string",
-      size: "size",
-      position: "possition",
-    },
-    "background",
-    true,
-  ),
   grid: {
     type: "property",
     valueType: "never",
@@ -109,11 +60,23 @@ const CSSDefinitions: Record<string, ICSSAttribute> = {
     CSSName: "justify-content",
     CSSValue: "<value>",
   },
+  bgcolor: {
+    type: "property",
+    valueType: "color",
+    CSSName: "background-color",
+    CSSValue: "<value>",
+  },
+  padding: {
+    type: "property",
+    valueType: "size",
+    CSSName: "padding",
+    CSSValue: "<value>",
+  },
 };
 
 const gGatheredAttrs: { key: string; value: string }[] = [];
-const gParentAttributesToFill = new Map<string, ICSSAttribute>();
 const gMediaQueriesToFill = new Map<string, string>();
+const gReusableComponents = new Map<string, typeof gGatheredAttrs>();
 
 const gTagsToIgnore = new Set(["head", "script", "style"]);
 const gMediaQueries = new Set(["sm", "md", "lg", "xl", "2xl", "print", "dark"]);
@@ -141,31 +104,8 @@ const getMediaQuery = (name: string): string => {
   }
 };
 
-const findCSSAttribute = (
-  name: string,
-): ICSSAttribute | ICSSSubAttribute | undefined => {
-  if (CSSDefinitions[name]) {
-    return CSSDefinitions[name];
-  }
-  // It may be a composed attribute
-  for (const key in CSSDefinitions) {
-    const attr = CSSDefinitions[key];
-    // Remove the prefix if it exists, the prefix is the parent attribute
-    if (!name.startsWith(`${key}-`)) {
-      continue;
-    }
-    const subAttrName = name.slice(key.length + 1);
-    if (attr.subAttributes && attr.subAttributes[subAttrName]) {
-      return {
-        types: attr.subAttributes[subAttrName],
-        parentAttribute: {
-          name: key,
-          attr: attr,
-        },
-      };
-    }
-  }
-  return undefined;
+const findCSSAttribute = (name: string): ICSSAttribute | undefined => {
+  return CSSDefinitions[name];
 };
 const getSanitizedCSSSelector = (
   name: string | string[],
@@ -188,21 +128,15 @@ const getCSSRule = (
   selectorValue: string,
   value: string,
   cssname?: string,
-): string => {
+): { selector: string; value: string } => {
   const sanitizedSelector = getSanitizedCSSSelector(name, selectorValue);
   if (!cssname) {
     cssname = name[0];
   }
-  return `${sanitizedSelector} { ${cssname}: ${value}; }\n`;
-};
-
-const isAttributeASubAttribute = (
-  attr: ICSSAttribute | ICSSSubAttribute,
-): attr is ICSSSubAttribute => {
-  return (
-    (attr as ICSSSubAttribute).types !== undefined &&
-    (attr as ICSSSubAttribute).parentAttribute !== undefined
-  );
+  return {
+    selector: sanitizedSelector,
+    value: `${cssname}: ${value};`,
+  };
 };
 
 const validateCSSValue = (
@@ -325,7 +259,9 @@ const validateCSSValue = (
 };
 
 const createStyleSheet = () => {
-  let sheet = gStyleSheetHeader;
+  let attrsSheet = "";
+  let componentsSheet = "";
+  let attributeCSSValues = new Map<string, string>();
   for (const attr of gGatheredAttrs) {
     let { key, value } = attr;
     let foundMediaQuery = "";
@@ -345,7 +281,14 @@ const createStyleSheet = () => {
       }
       return name;
     };
-    const addToStyleSheet = (rule: string) => {
+    const addToStyleSheet = ({
+      selector,
+      value,
+    }: {
+      selector: string;
+      value: string;
+    }) => {
+      const rule = `${selector} { ${value} }\n`;
       if (foundMediaQuery) {
         if (!gMediaQueriesToFill.has(foundMediaQuery)) {
           gMediaQueriesToFill.set(foundMediaQuery, "");
@@ -355,78 +298,61 @@ const createStyleSheet = () => {
           gMediaQueriesToFill.get(foundMediaQuery) + "\t" + rule,
         );
       } else {
-        sheet += rule;
+        attrsSheet += rule;
+      }
+      if (!attributeCSSValues.has(key)) {
+        attributeCSSValues.set(key, value);
       }
     };
     const cssAttr = findCSSAttribute(key);
     if (cssAttr) {
-      if (isAttributeASubAttribute(cssAttr)) {
-        // It's a composed attribute, we need to create a parent attribute
-        const parentAttr = cssAttr.parentAttribute;
-        if (!gParentAttributesToFill.has(parentAttr.name)) {
-          gParentAttributesToFill.set(parentAttr.name, parentAttr.attr);
-        }
+      if (cssAttr.type === "property") {
         // Add to the style sheet as the form of a CSS variable
-        const varName = createCssValue(`${parentAttr.name}-${key}`);
-        validateCSSValue(value, cssAttr.types, parentAttr.attr);
-        addToStyleSheet(getCSSRule(getCSSAttributeName(key), value, value, varName));
+        validateCSSValue(value, cssAttr.valueType, cssAttr);
+        addToStyleSheet(
+          getCSSRule(
+            getCSSAttributeName(key),
+            value,
+            value,
+            cssAttr.CSSName || key,
+          ),
+        );
       } else {
-        // It's a simple attribute
-        if (cssAttr.type === "property") {
-          if (cssAttr.subAttributes) {
-            if (!gParentAttributesToFill.has(cssAttr.CSSName || key)) {
-              gParentAttributesToFill.set(getCSSAttributeName(key), cssAttr);
-            }
-          }
-          // Add to the style sheet as the form of a CSS variable
-          if (cssAttr.canHaveShortHand && cssAttr.subAttributes) {
-            const typeFound = validateCSSValue(
-              value,
-              cssAttr.subAttributes?.shorthand || cssAttr.valueType,
-              cssAttr,
-            );
-            const subAttributeWithType = Object.entries(
-              cssAttr.subAttributes || {},
-            ).find(([subKey, subType]) => subType === typeFound);
-            if (!subAttributeWithType) {
-              throw new Error(
-                `No sub-attribute found for ${key} with value type ${cssAttr.valueType}`,
-              );
-            }
-            const varName = createCssValue(
-              `${cssAttr.CSSName || key}-${subAttributeWithType[0]}`,
-            );
-            addToStyleSheet(getCSSRule(getCSSAttributeName(key), value, value, varName));
-          } else {
-            validateCSSValue(value, cssAttr.valueType, cssAttr);
-            addToStyleSheet(
-              getCSSRule(getCSSAttributeName(key), value, value, cssAttr.CSSName || key),
-            );
-          }
-        } else {
-          throw new Error(
-            `Unsupported attribute type: ${cssAttr.type} for attribute ${key}`,
-          );
-        }
+        throw new Error(
+          `Unsupported attribute type: ${cssAttr.type} for attribute ${key}`,
+        );
       }
     }
   }
-  for (const [name, attr] of gParentAttributesToFill) {
-    // Add the parent attributes to the style sheet
-    const attributeNames = Object.keys(attr.subAttributes || {})
-      .filter((subKey) => subKey !== "shorthand")
-      .map((sub) => `${name}-${sub}`);
-    attributeNames.push(name);
-    const cssValue = attr.CSSValue;
-    sheet += getCSSRule(attributeNames, "", cssValue, attr.CSSName || name);
+  for (const component of gReusableComponents) {
+    const [componentName, attributes] = component;
+    let componentSheet = `${componentName} {\n`;
+    for (const attr of attributes) {
+      const valFromCSS = attributeCSSValues.get(attr.key);
+      if (!valFromCSS) {
+        throw new Error(
+          `bug: Attribute ${attr.key} not found in CSS values for component ${componentName}`,
+        );
+      }
+      componentSheet += `\t${valFromCSS}\n`;
+    }
+    componentSheet += `}\n`;
+    componentsSheet += componentSheet;
   }
   for (const query of gMediaQueries) {
     if (gMediaQueriesToFill.has(getMediaQuery(query))) {
       const rules = gMediaQueriesToFill.get(getMediaQuery(query));
-      sheet += `${getMediaQuery(query)} {\n${rules}}\n`;
+      attrsSheet += `${getMediaQuery(query)} {\n${rules}}\n`;
     }
   }
-  return sheet;
+  if (gReusableComponents.size) {
+    attrsSheet += `:is(${[...gReusableComponents.keys()]
+      .map((name) => `[x:${name}]`)
+      .join(", ")}) {\n`;
+    attrsSheet += `\tdisplay: none !important;\n`;
+    attrsSheet += `}\n`;
+  }
+  return gStyleSheetHeader + componentsSheet + attrsSheet;
 };
 
 const transformHtml = (html: HTMLElement) => {
@@ -435,6 +361,7 @@ const transformHtml = (html: HTMLElement) => {
     if (gTagsToIgnore.has(node.rawTagName)) {
       return;
     }
+    const elementAttributes: typeof gGatheredAttrs = [];
     if (node.attributes) {
       Object.entries(node.attributes).forEach(([key, value]) => {
         // Check if the attribute is already gathered
@@ -445,12 +372,22 @@ const transformHtml = (html: HTMLElement) => {
         ) {
           gGatheredAttrs.push({ key, value });
         }
+        if (!elementAttributes.some((attr) => attr.key === key)) {
+          elementAttributes.push({ key, value });
+        }
         for (const child of node.childNodes) {
           if (child) {
             gatherAttributes(child as HTMLElement);
           }
         }
       });
+    }
+    if (node.rawTagName?.toLowerCase().startsWith("x:")) {
+      // We found a reusable component, we need to gather its attributes
+      const componentName = node.rawTagName.slice(2);
+      if (!gReusableComponents.has(componentName)) {
+        gReusableComponents.set(componentName, elementAttributes);
+      }
     }
     node.childNodes.forEach(gatherAttributes as any);
   };
